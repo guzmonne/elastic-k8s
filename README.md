@@ -461,6 +461,10 @@ k get secret elastic-k8s-es-elastic-user -o=jsonpath='{.data.elastic}' |\
 
 ## Traefik
 
+**Es importante modificar el DOMINIO utilizado antes de aplicar la configuración
+indicada a continuación. Se utilizo como ejemplo el dominio `kibana.k8s.conapps.click`.
+Siempre donde aparezca una mención de este valor, debe ser modificado por su dominio.**
+
 Así como esta funcionando el sistema en este momento no podemos acceder a ninguno
 de los servicios por fuera del clúster. Para esto, debemos configurar un `IngressController`.
 Básicamente, es un recuros que se encarga de publicar nuestros servicios de acuerdo
