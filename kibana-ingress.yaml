@@ -1,0 +1,18 @@
+---
+apiVersion: traefik.containo.us/v1alpha1
+kind: IngressRoute
+metadata:
+  name: kibana
+spec:
+  entryPoints:
+    - websecure
+  routes:
+    - match: Host(`kibana.k8s.conatest.click`)
+      kind: Rule
+      services:
+        - name: elastic-k8s-kb-http
+          port: 5601
+  tls:
+    secretName: kibana
+    domains:
+      - main: kibana.k8s.conatest.click
