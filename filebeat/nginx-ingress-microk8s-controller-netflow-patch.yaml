@@ -1,0 +1,10 @@
+spec:
+  template:
+    spec:
+      containers:
+        - name: nginx-ingress-microk8s
+          ports:
+            - containerPort: 2055
+              hostPort: 2055
+              name: netflow
+              protocol: UDP

@@ -1,0 +1,6 @@
+data:
+  9001: "default/filebeat-cisco:9001"
+  9003: "default/filebeat-cisco:9003"
+  9002: "default/filebeat-cisco:9002"
+  9506: "default/filebeat-cisco:9506"
+  9525: "default/filebeat-cisco:9525"

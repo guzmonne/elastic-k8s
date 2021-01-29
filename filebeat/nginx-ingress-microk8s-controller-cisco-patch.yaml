@@ -1,0 +1,26 @@
+spec:
+  template:
+    spec:
+      containers:
+        - name: nginx-ingress-microk8s
+          ports:
+            - containerPort: 9001
+              hostPort: 9001
+              name: asa
+              protocol: UDP
+            - containerPort: 9003
+              hostPort: 9003
+              name: ftd
+              protocol: UDP
+            - containerPort: 9002
+              hostPort: 9002
+              name: ios
+              protocol: UDP
+            - containerPort: 9506
+              hostPort: 9506
+              name: nexus
+              protocol: UDP
+            - containerPort: 9525
+              hostPort: 9525
+              name: meraki
+              protocol: UDP

@@ -560,14 +560,12 @@ a través del dominio configurado.
 https://kibana.k8s.conatest.click
 ```
 
-## Logstash
+## Syslog
 
-Logstash es otro producto del `stack` de elastic que simplifica la ingesta de datos
-de múltiples fuentes. En nuestro caso, lo utilizaremos para colectar información de
-`syslog`, `snmp`, y `netflow`. Todos los archivo necesarios para poner en marcha
+Para la recepción de mensajes de Syslog utilizaremos otro producto del ELK stack:
+Logstash. Logstash simplifica la ingesta de datos
+de múltiples fuentes. Todos los archivo necesarios para poner en marcha
 estos servicios se encuentran en la carpeta `./logstash`.
-
-### Syslog
 
 Lo primero que tenemos que hacer es crear un `ConfigMap` con las configuraciones
 de Logstash. Para esto, utilizaremos `kubectl` y pasaremos como entrada los archivos
@@ -597,4 +595,97 @@ k -n ingress patch daemonset.apps/nginx-ingress-microk8s-controller \
 k -n ingress patch configmap/nginx-ingress-tcp-microk8s-conf \
   --type merge \
   --patch "$(cat logstash/nginx-ingress-tcp-microk8s-conf-syslog-patch.yaml)"
+```
+
+## CISCO con Filebeat
+
+Otra alternativa para colectar mensajes de Syslog es a través de Filebeat. Sin embargo,
+este procedimiento solo sirve para trabajar con equipos de CISCO.
+Todos los archivos referentes a este proceso pueden encontrarse en la carpeta `./filebeat`.
+
+```bash
+# 1.
+# Aplicamos los recursos
+k apply -f filebeat/filebeat-cisco.yaml
+# 2.
+# Esperamos unos segundos a que terminen de levantarse los contenedores
+sleep 30
+# 3.
+# Obtenemos el id de alguno de los pods de FILEBEAT
+export FILEBEAT_POD=$(k get all | grep pod/filebeat | awk '{print $1}' | head -n 1)
+# 4.
+# Configuramos los recursos en Elasticsearh y Kibana
+k exec $FILEBEAT_POD -- ./filebeat setup --dashboards -c /etc/filebeat.yml
+k exec $FILEBEAT_POD -- ./filebeat setup --index-management -c /etc/filebeat.yml
+k exec $FILEBEAT_POD -- ./filebeat setup --pipelines -c /etc/filebeat.yml
+```
+
+El proceso para habilitar la ingesta desde el exterior es similar a la empleada para la
+configuración de Syslog:
+
+<details>
+<summary><b>Es necesario haber cargado el add-on de <code>ingress</code>.</summary>
+<pre>
+microk8s enable ingress:default-ssl-certificate=default/ssl-certificate
+<pre>
+</details>
+<br/>
+
+```bash
+# 1.
+# Patcheamos los contenedores de `nginx` para que escuchen el puerto de netflow
+k -n ingress patch daemonset.apps/nginx-ingress-microk8s-controller \
+  --patch "$(cat filebeat/nginx-ingress-microk8s-controller-cisco-patch.yaml)"
+# 2.
+# Patcheamos la configuración del `Ingress` de UDP
+k -n ingress patch configmap/nginx-ingress-udp-microk8s-conf \
+  --type merge \
+  --patch "$(cat filebeat/nginx-ingress-udp-microk8s-conf-cisco-patch.yaml)"
+```
+
+## Netflow
+
+Filebeat es otro producto más desarrollado por Elastic que simplifica el proceso de
+ingesta de datos. Nosotros lo utilizaremos para indexar Netflow.
+
+Para ponerlo en producción solo tenemos que correr los siguientes comandos:
+
+```bash
+# 1.
+# Aplicamos los recursos
+k apply -f filebeat/filebeat-netflow.yaml
+# 2.
+# Esperamos unos segundos a que terminen de levantarse los contenedores
+sleep 30
+# 3.
+# Obtenemos el id de alguno de los pods de FILEBEAT
+export FILEBEAT_POD=$(k get all | grep pod/filebeat | awk '{print $1}' | head -n 1)
+# 4.
+# Configuramos los recursos en Elasticsearh y Kibana
+k exec $FILEBEAT_POD -- ./filebeat setup --dashboards -c /etc/filebeat.yml
+k exec $FILEBEAT_POD -- ./filebeat setup --index-management -c /etc/filebeat.yml
+k exec $FILEBEAT_POD -- ./filebeat setup --pipelines -c /etc/filebeat.yml
+```
+
+El proceso para habilitar la ingesta de Netflow es similar a la empleada para la
+configuración de Syslog:
+
+<details>
+<summary><b>Es necesario haber cargado el add-on de <code>ingress</code>.</summary>
+<pre>
+microk8s enable ingress:default-ssl-certificate=default/ssl-certificate
+<pre>
+</details>
+<br/>
+
+```bash
+# 1.
+# Patcheamos los contenedores de `nginx` para que escuchen el puerto de netflow
+k -n ingress patch daemonset.apps/nginx-ingress-microk8s-controller \
+  --patch "$(cat filebeat/nginx-ingress-microk8s-controller-netflow-patch.yaml)"
+# 2.
+# Patcheamos la configuración del `Ingress` de TCP
+k -n ingress patch configmap/nginx-ingress-udp-microk8s-conf \
+  --type merge \
+  --patch "$(cat filebeat/nginx-ingress-udp-microk8s-conf-netflow-patch.yaml)"
 ```

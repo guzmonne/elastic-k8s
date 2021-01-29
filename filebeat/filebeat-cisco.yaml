@@ -1,0 +1,233 @@
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: filebeat-cisco-config
+  namespace: default
+  labels:
+    app: filebeat
+    ingest: cisco
+data:
+  filebeat.yml: |-
+    filebeat.modules:
+      - module: cisco
+        asa:
+          enabled: true
+          var.syslog_host: 0.0.0.0
+          var.syslog_port: 9001
+          var.log_level: 5
+        ftd:
+          enabled: true
+          var.syslog_host: 0.0.0.0
+          var.syslog_port: 9003
+          var.log_level: 5
+        ios:
+          enabled: true
+          var.syslog_host: 0.0.0.0
+          var.syslog_port: 9002
+        nexus:
+          enabled: true
+          var.syslog_host: 0.0.0.0
+          var.syslog_port: 9506
+          var.tz_offset: -03:00
+        meraki:
+          enabled: true
+          var.syslog_host: 0.0.0.0
+          var.syslog_port: 9525
+          var.tz_offset: -03:00
+        umbrella:
+          enabled: false
+
+    setup.template.settings:
+      index.number_of_shards: 2
+      index.number_of_replicas: 2
+
+    setup.kibana.host: "http://${KIBANA_HOST}:${KIBANA_PORT}"
+    setup.kibana.ssl.enabled: true
+
+    output.elasticsearch.hosts: ['https://${ELASTICSEARCH_HOST}:${ELASTICSEARCH_PORT}']
+    output.elasticsearch.username: ${ELASTICSEARCH_USERNAME}
+    output.elasticsearch.password: ${ELASTICSEARCH_PASSWORD}
+    output.elasticsearch.ssl.certificate_authorities: ["/etc/pki/root/ca.crt"]
+    output.elasticsearch.ssl.certificate: "/etc/pki/root/tls.crt"
+    output.elasticsearch.ssl.key: "/etc/pki/root/tls.key"
+---
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: filebeat
+  namespace: default
+  labels:
+    app: filebeat
+    ingest: cisco
+spec:
+  selector:
+    matchLabels:
+      app: filebeat
+      ingest: cisco
+  template:
+    metadata:
+      labels:
+        app: filebeat
+        ingest: cisco
+    spec:
+      serviceAccountName: filebeat
+      terminationGracePeriodSeconds: 30
+      containers:
+      - name: filebeat
+        image: docker.elastic.co/beats/filebeat:7.10.2
+        args: [
+          "-c", "/etc/filebeat.yml",
+          "-e",
+        ]
+        ports:
+          - containerPort: 9001
+            protocol: UDP
+          - containerPort: 9003
+            protocol: UDP
+          - containerPort: 9002
+            protocol: UDP
+          - containerPort: 9506
+            protocol: UDP
+          - containerPort: 9525
+            protocol: UDP
+        env:
+        - name: KIBANA_HOST
+          value: elastic-k8s-kb-http
+        - name: KIBANA_PORT
+          value: "5601"
+        - name: ELASTICSEARCH_HOST
+          value: elastic-k8s-es-http
+        - name: ELASTICSEARCH_PORT
+          value: "9200"
+        - name: ELASTICSEARCH_USERNAME
+          value: elastic
+        - name: ELASTICSEARCH_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: elastic-k8s-es-elastic-user
+              key: elastic
+        - name: NODE_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: spec.nodeName
+        securityContext:
+          runAsUser: 0
+        resources:
+          limits:
+            memory: 200Mi
+          requests:
+            cpu: 100m
+            memory: 100Mi
+        volumeMounts:
+        - name: config
+          mountPath: /etc/filebeat.yml
+          readOnly: true
+          subPath: filebeat.yml
+        - name: data
+          mountPath: /usr/share/filebeat/data
+        - name: varlibdockercontainers
+          mountPath: /var/lib/docker/containers
+          readOnly: true
+        - name: varlog
+          mountPath: /var/log
+          readOnly: true
+        - name: root-ca
+          mountPath: /etc/pki/root
+          readOnly: true
+        - name: client-ca
+          mountPath: /etc/pki/client
+          readOnly: true
+      volumes:
+      - name: config
+        configMap:
+          defaultMode: 0640
+          name: filebeat-cisco-config
+      - name: varlibdockercontainers
+        hostPath:
+          path: /var/lib/docker/containers
+      - name: varlog
+        hostPath:
+          path: /var/log
+      # data folder stores a registry of read status for all files, so we don't send everything again on a Filebeat pod restart
+      - name: data
+        hostPath:
+          # When filebeat runs as non-root user, this directory needs to be writable by group (g+w).
+          path: /var/lib/filebeat-data
+          type: DirectoryOrCreate
+      - name: root-ca
+        secret:
+          secretName: elastic-k8s-es-http-certs-internal
+      - name: client-ca
+        secret:
+          secretName: elastic-k8s-kb-es-ca
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: filebeat
+subjects:
+- kind: ServiceAccount
+  name: filebeat
+  namespace: default
+roleRef:
+  kind: ClusterRole
+  name: filebeat
+  apiGroup: rbac.authorization.k8s.io
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: filebeat
+  labels:
+    app: filebeat
+rules:
+- apiGroups: [""] # "" indicates the core API group
+  resources:
+  - namespaces
+  - pods
+  verbs:
+  - get
+  - watch
+  - list
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: filebeat
+  namespace: default
+  labels:
+    app: filebeat
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: filebeat-cisco
+  labels:
+    app: filebeat
+    ingest: cisco
+spec:
+  selector:
+    app: filebeat
+    ingest: cisco
+  ports:
+    - name: asa
+      port: 9001
+      targetPort: 9001
+      protocol: UDP
+    - name: ftd
+      port: 9003
+      targetPort: 9003
+      protocol: UDP
+    - name: ios
+      port: 9002
+      targetPort: 9002
+      protocol: UDP
+    - name: nexus
+      port: 9506
+      targetPort: 9506
+      protocol: UDP
+    - name: meraki
+      port: 9525
+      targetPort: 9525
+      protocol: UDP
