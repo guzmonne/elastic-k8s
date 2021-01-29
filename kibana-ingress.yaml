@@ -1,18 +1,18 @@
 ---
-apiVersion: traefik.containo.us/v1alpha1
-kind: IngressRoute
+apiVersion: networking.k8s.io/v1beta1
+kind: Ingress
 metadata:
   name: kibana
 spec:
-  entryPoints:
-    - websecure
-  routes:
-    - match: Host(`kibana.k8s.conatest.click`)
-      kind: Rule
-      services:
-        - name: elastic-k8s-kb-http
-          port: 5601
   tls:
-    secretName: kibana
-    domains:
-      - main: kibana.k8s.conatest.click
+    - hosts:
+        - kibana.k8s.conatest.click
+      secretName: ssl-certificate
+  rules:
+    - host: kibana.k8s.conatest.click
+      http:
+        paths:
+        - path: /
+          backend:
+            serviceName: elastic-k8s-kb-http
+            servicePort: 5601

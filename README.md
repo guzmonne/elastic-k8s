@@ -459,29 +459,6 @@ k get secret elastic-k8s-es-elastic-user -o=jsonpath='{.data.elastic}' |\
   base64 --decode;echo
 ```
 
-## Traefik
-
-**Es importante modificar el DOMINIO utilizado antes de aplicar la configuración
-indicada a continuación. Se utilizo como ejemplo el dominio `kibana.k8s.conapps.click`.
-Siempre donde aparezca una mención de este valor, debe ser modificado por su dominio.**
-
-Así como esta funcionando el sistema en este momento no podemos acceder a ninguno
-de los servicios por fuera del clúster. Para esto, debemos configurar un `IngressController`.
-Básicamente, es un recuros que se encarga de publicar nuestros servicios de acuerdo
-a una serie de reglas que nosotros definimos. Lo bueno es que una vez expuesto, podemos
-llegar a los mismos a través de las interfaces de red de los nodos que decidamos.
-
-El `IngressController` que configuraremos se llama `traefik`.
-
-[Documentación](https://doc.traefik.io/traefik/)
-
-Dentro de las funcionalidades de este producto, esta la integración directa con
-Let's Encrypt, que permite la descarga y renovación de certificados de forma
-automática. Se pede encontrar una guía de como configurar esto en el
-[siguiente link](https://doc.traefik.io/traefik/v2.0/user-guides/crd-acme/).
-
-Sin embargo, en este ejemplo mostraremos como cargar certificados obtenidos externamente.
-
 <details>
   <summary>¿Como puedo obtener certificados para hacer pruebas?</summary>
 <p>
@@ -499,51 +476,80 @@ sudo ln -s /snap/bin/certbot /usr/bin/certbot
 # Con el servidor apagado y los registros DNS apuntando al mismo
 # ejecutar el siguiente comando. Esto levantará un servidor web en
 # el servidor para validar los certificados.
-sudo certbot certonly -d kibana.k8s.conatest.click --standalone
+sudo certbot certonly \
+ --manual \
+ --preferred-challenges=dns \
+ --email gmonne@conatel.com.uy \
+ --server https://acme-v02.api.letsencrypt.org/directory \
+ --agree-tos \
+ -d *.k8s.conatest.click
 # OBS1: Es importante sustituir el dominio `kibana.k8s.conatest.click`
 # por el que realmente corresponda.
 # OBS2: Durante el proceso se le pedira que ingrese la dirección de correo
 # del administrador del dominio que piensa utilizar.
 # 4.
 # Obtenemos el certificado y la llave.
-sudo cp /etc/letsencrypt/live/kibana.k8s.conatest.click/cert.pem ./tls.crt
-sudo cp /etc/letsencrypt/live/kibana.k8s.conatest.click/privkey.pem ./tls.key
+sudo cp /etc/letsencrypt/live/k8s.conatest.click/cert.pem ./tls.crt
+sudo cp /etc/letsencrypt/live/k8s.conatest.click/privkey.pem ./tls.key
 # 5.
 # Modificamos los permisos para evitar problemas
 sudo chown $USER tls.*
 </pre>
 </details>
+<br />
+<details>
+  <summary>¿Como puedo crear mis propios certificados?</summary>
+  Podemos generar nuestros propios certificados utilizando openssl. Es importante
+  notar que no serán detectados por los exploradores debido a que no han sido firmados
+  por una CA conocida.
+
+  <pre>
+# 1.
+# Definimos algunas variables de entornos de interes
+export KEY_FILE=tls.key
+export CERT_FILE=tls.crt
+export HOST=*.k8s.conatest.click
+# 2.
+# Creamos el certificado y su llave
+openssl req -x509 -nodes -days 365 -newkey rsa:2048 \
+  -keyout ${KEY_FILE} \
+  -out ${CERT_FILE} \
+  -subj "/CN=${HOST}/O=${HOST}"
+  </pre>
+</details>
 
 <br/>
 
 Vamos a suponer que el certificado y la clave TLS se encuentran en la raiz del
-servidor donde estamos trabajando, llamadas `tls.crt` y `tls.key`. Si las mismas
-se encuentran bajo otro nombre, es necesario renombrarlas. De otra manera, Traefik
-no las identificará.
-
-La forma en la que le vamos a indicar a Traefik que certificados utilizar es a través
-de un `Secret` cuyas llaves corresponderán al certificad y a la llave. Para simplificar
-la creación de este secreto, podemos utilizar el siguiente comando:
+servidor donde estamos trabajando, llamadas `tls.crt` y `tls.key`. Para que nuestro
+`Ingress` sepa que certificados vamos a utilizar, debemos almacenarlos en un `Secret`.
 
 ```bash
-k create secret generic kibana --from-file=tls.crt --from-file=tls.key
+# 1.
+# Configuramos los nombres de los archivos a utilizar
+export KEY_FILE=tls.key
+export CERT_FILE=tls.crt
+# 2.
+# Creamos el secreto
+k create secret tls ssl-certificate --key ${KEY_FILE} --cert ${CERT_FILE}
 ```
 
 Si describimos el resultado de este secreto, veremos que nuestros archivos fueron
 almacenados encodeados en base64.
 
 ```bash
-k edit secret kibana
+k edit secret ssl-certificate
 ```
 
-Ahora lo que queda es levantar Traefik y configurar el `Ingress` para acceder a Kibana.
+Ahora lo que queda es levantar el `Ingress` para acceder a Kibana. Este es un recurso
+utilizado para publicar servicios fuera del clúster.
 
 ```bash
 # 1.
-# Aplicamos los recursos correspondientes a Traefik
-k apply -f traefik.yaml
+# Habilitar el ingress en el clúster
+microk8s enable ingress:default-ssl-certificate=default/ssl-certificate
 # 2.
-# Aplicamos los recursos correspondientes al Ingress de Kibana
+# Levantar el ingress de Kibana
 k apply -f kibana-ingress.yaml
 ```
 
@@ -552,4 +558,43 @@ a través del dominio configurado.
 
 ```
 https://kibana.k8s.conatest.click
+```
+
+## Logstash
+
+Logstash es otro producto del `stack` de elastic que simplifica la ingesta de datos
+de múltiples fuentes. En nuestro caso, lo utilizaremos para colectar información de
+`syslog`, `snmp`, y `netflow`. Todos los archivo necesarios para poner en marcha
+estos servicios se encuentran en la carpeta `./logstash`.
+
+### Syslog
+
+Lo primero que tenemos que hacer es crear un `ConfigMap` con las configuraciones
+de Logstash. Para esto, utilizaremos `kubectl` y pasaremos como entrada los archivos
+de configuración `logstash.yml` y `logstash-syslog.conf`.
+
+```bash
+k create configmap logstash-syslog \
+  --from-file=logstash.yml=logstash/logstash.yml \
+  --from-file=logstash.conf=logstash/logstash-syslog.conf
+```
+
+Luego, levantamos los recursos asociados:
+
+```bash
+k apply -f logstash/logstash-syslog.yaml
+```
+
+Por último, tenemos que configurar el `Ingress` para que publique los puertos:
+
+```bash
+# 1.
+# Patcheamos los contenedores de `nginx` para que escuchen el puerto de syslog
+k -n ingress patch daemonset.apps/nginx-ingress-microk8s-controller \
+  --patch "$(cat logstash/nginx-ingress-microk8s-controller-syslog-patch.yaml)"
+# 2.
+# Patcheamos la configuración del `Ingress` de TCP
+k -n ingress patch configmap/nginx-ingress-tcp-microk8s-conf \
+  --type merge \
+  --patch "$(cat logstash/nginx-ingress-tcp-microk8s-conf-syslog-patch.yaml)"
 ```

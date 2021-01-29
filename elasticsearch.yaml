@@ -5,10 +5,6 @@ metadata:
   name: elastic-k8s
 spec:
   version: 7.10.2
-  http:
-    tls:
-      selfSignedCertificate:
-        disabled: true
   nodeSets:
     - name: masters
       count: 3

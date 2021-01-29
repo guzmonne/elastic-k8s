@@ -1,0 +1,78 @@
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: logstash-syslog
+  labels:
+    app: logstash
+    ingest: syslog
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: logstash
+      ingest: syslog
+  template:
+    metadata:
+      labels:
+        app: logstash
+        ingest: syslog
+    spec:
+      containers:
+        - name: logstash
+          image: docker.elastic.co/logstash/logstash:7.10.2
+          ports:
+            - containerPort: 5514
+              protocol: TCP
+          env:
+            - name: ES_HOSTS
+              value: "https://elastic-k8s-es-http:9200"
+            - name: ES_USER
+              value: "elastic"
+            - name: ES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: elastic-k8s-es-elastic-user
+                  key: elastic
+          resources: {}
+          volumeMounts:
+            - name: config-volume
+              mountPath: /usr/share/logstash/config
+            - name: logstash-pipeline-volume
+              mountPath: /usr/share/logstash/pipeline
+            - name: cert-ca
+              mountPath: /etc/logstash/certificates
+              readOnly: true
+      volumes:
+        - name: config-volume
+          configMap:
+            name: logstash-syslog
+            items:
+              - key: logstash.yml
+                path: logstash.yml
+        - name: logstash-pipeline-volume
+          configMap:
+            name: logstash-syslog
+            items:
+              - key: logstash.conf
+                path: logstash.conf
+        - name: cert-ca
+          secret:
+            secretName: elastic-k8s-es-http-certs-public
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: logstash-syslog
+  labels:
+    app: logstash
+    ingest: syslog
+spec:
+  selector:
+    app: logstash
+    ingest: syslog
+  ports:
+    - name: "syslog"
+      port: 5514
+      targetPort: 5514
+      protocol: TCP
