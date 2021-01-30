@@ -560,48 +560,30 @@ a través del dominio configurado.
 https://kibana.k8s.conatest.click
 ```
 
-## Syslog
-
-Para la recepción de mensajes de Syslog utilizaremos otro producto del ELK stack:
-Logstash. Logstash simplifica la ingesta de datos
-de múltiples fuentes. Todos los archivo necesarios para poner en marcha
-estos servicios se encuentran en la carpeta `./logstash`.
-
-Lo primero que tenemos que hacer es crear un `ConfigMap` con las configuraciones
-de Logstash. Para esto, utilizaremos `kubectl` y pasaremos como entrada los archivos
-de configuración `logstash.yml` y `logstash-syslog.conf`.
-
-```bash
-k create configmap logstash-syslog \
-  --from-file=logstash.yml=logstash/logstash.yml \
-  --from-file=logstash.conf=logstash/logstash-syslog.conf
-```
-
-Luego, levantamos los recursos asociados:
-
-```bash
-k apply -f logstash/logstash-syslog.yaml
-```
-
-Por último, tenemos que configurar el `Ingress` para que publique los puertos:
-
-```bash
-# 1.
-# Patcheamos los contenedores de `nginx` para que escuchen el puerto de syslog
-k -n ingress patch daemonset.apps/nginx-ingress-microk8s-controller \
-  --patch "$(cat logstash/nginx-ingress-microk8s-controller-syslog-patch.yaml)"
-# 2.
-# Patcheamos la configuración del `Ingress` de TCP
-k -n ingress patch configmap/nginx-ingress-tcp-microk8s-conf \
-  --type merge \
-  --patch "$(cat logstash/nginx-ingress-tcp-microk8s-conf-syslog-patch.yaml)"
-```
-
 ## CISCO con Filebeat
 
-Otra alternativa para colectar mensajes de Syslog es a través de Filebeat. Sin embargo,
-este procedimiento solo sirve para trabajar con equipos de CISCO.
-Todos los archivos referentes a este proceso pueden encontrarse en la carpeta `./filebeat`.
+Filebeat es un producto desarrollado por Elastic que simplifica el proceso de ingesta
+de datos de múltiples fuentes. El mismo, cuenta con dos mecanismos para recopilar
+información: `inputs` y `modules`. Las `inputs` son la versión anterior de los
+`modules` y siguen soportados por continuidad. Sin embargo, se recomienda utilizar
+`modules` en nuevas implementaciones.
+
+En este caso, utilizaremos Filebeat como servidor de Syslog. Utilizaremos un `DaemonSet`
+para levantar un `pod` de Filebeat en cada servidor, y un `Service` para llegar hasta el.
+También configuraremos el `Ingress` para escuchar en los puertos del Syslog.
+
+Filebeat ya cuenta con un modulo diseñado para recibir y parsear `logs` de dispositivos
+Cisco. [Este modulo](https://www.elastic.co/guide/en/beats/filebeat/7.10/filebeat-module-cisco.html) simplifica el parseo de mensajes de Syslog, así como la creación de indices
+para su almacenamiento. Lamentablemente, solo incluye un `dashboard` predefinido
+para trabajar con `logs` de dispositivos `ASA`. El módulo es capaz de manejar `logs`
+de: `asa`, `firepower`, `ios`, `nexus`, `meraki`, y `umbrella`. Configuraremos todos
+menos el de `umbrella` dado que requiere de acceso a un `Bucket` de AWS S3, en donde
+`umbrella` deja disponible los `logs`.
+
+Todos los archivos disponibles a esta configuración se encuentran en la carpeta `filebeat`.
+
+El primer paso es levantar los recursos en Kubernetes y correr algunos comandos
+necesarios para configurar Elasticsearch y Kibana.
 
 ```bash
 # 1.
@@ -609,6 +591,8 @@ Todos los archivos referentes a este proceso pueden encontrarse en la carpeta `.
 k apply -f filebeat/filebeat-cisco.yaml
 # 2.
 # Esperamos unos segundos a que terminen de levantarse los contenedores
+# Puede ser que no sea suficiente para que los pods estén listos. En ese caso,
+# verificar su estado, y repetir los pasos 3 y 4.
 sleep 30
 # 3.
 # Obtenemos el id de alguno de los pods de FILEBEAT
@@ -620,8 +604,69 @@ k exec $FILEBEAT_POD -- ./filebeat setup --index-management -c /etc/filebeat.yml
 k exec $FILEBEAT_POD -- ./filebeat setup --pipelines -c /etc/filebeat.yml
 ```
 
-El proceso para habilitar la ingesta desde el exterior es similar a la empleada para la
-configuración de Syslog:
+La configuración de Filebeat utilizada se puede encontrar dentro del `ConfigMap`
+llamado `filebeat-cisco-config`. Este es un ejemplo de como se ve:
+
+```yaml
+# k describe configmap filebeat-cisco-config
+Name:         filebeat-cisco-config
+Namespace:    default
+Labels:       app=filebeat
+              ingest=cisco
+Annotations:  <none>
+
+Data
+====
+filebeat.yml:
+----
+filebeat.modules:
+  - module: cisco
+    asa:
+      enabled: true
+      var.syslog_host: 0.0.0.0
+      var.syslog_port: 9001
+      var.log_level: 5
+    ftd:
+      enabled: true
+      var.syslog_host: 0.0.0.0
+      var.syslog_port: 9003
+      var.log_level: 5
+    ios:
+      enabled: true
+      var.syslog_host: 0.0.0.0
+      var.syslog_port: 9002
+    nexus:
+      enabled: true
+      var.syslog_host: 0.0.0.0
+      var.syslog_port: 9506
+      var.tz_offset: -03:00
+    meraki:
+      enabled: true
+      var.syslog_host: 0.0.0.0
+      var.syslog_port: 9525
+      var.tz_offset: -03:00
+    umbrella:
+      enabled: false
+
+setup.template.settings:
+  index.number_of_shards: 2
+  index.number_of_replicas: 2
+
+setup.kibana.host: "http://${KIBANA_HOST}:${KIBANA_PORT}"
+setup.kibana.ssl.enabled: true
+
+output.elasticsearch.hosts: ['https://${ELASTICSEARCH_HOST}:${ELASTICSEARCH_PORT}']
+output.elasticsearch.username: ${ELASTICSEARCH_USERNAME}
+output.elasticsearch.password: ${ELASTICSEARCH_PASSWORD}
+output.elasticsearch.ssl.certificate_authorities: ["/etc/pki/root/ca.crt"]
+output.elasticsearch.ssl.certificate: "/etc/pki/root/tls.crt"
+output.elasticsearch.ssl.key: "/etc/pki/root/tls.key"
+Events:  <none>
+```
+
+Se puede apreciar de la salida los puertos en donde estamos escuchando por los `logs`
+de cada familia. Por ahora estos puertos solo están disponibles dentro del clúster
+de Kubernetes. El siguiente paso es publicarlos.
 
 <details>
 <summary><b>Es necesario haber cargado el add-on de <code>ingress</code>.</summary>
@@ -630,6 +675,41 @@ microk8s enable ingress:default-ssl-certificate=default/ssl-certificate
 <pre>
 </details>
 <br/>
+
+Por defecto, los `Ingress` en Kubernetes solamente permiten la publicación de servicios
+HTTP. Esto es debeido a que es díficil identificar a que servicio se debería rutear
+el tráfico cuando se trabaja con otros protocolos de red. El `Ingress` de NGINX evita
+esta limitiación al permitir la utilización de un `ConfigMap` en donde se indique
+a que servicio se debe rutear el tráfico recibido en otros puertos.
+
+Por lo tanto, para poder publicar los puertos de Syslog en nuestro cluster vamos a
+tener que:
+
+1. Abrir los puertos en los pods de Filebeat.
+2. Abrir los puertos en el servicio de Filebeat.
+2. Abrir los puertos en los pods del `nginx-ingress`.
+3. Actualizar el `ConfigMap` llamado `nginx-ingress-udp-microk8s-conf` con la lista
+de puertos que deben ser públicados.
+
+Los primeros dos pasos ya fueron configurados al aplicar el archivo
+`filebeat/filebeat-cisco.yaml`.
+
+La información dentro del `ConfigMap nginx-ingress-udp-microk8s-conf` debe estar compuesta por un mapa en donde las
+llaves correspondan a los puertos a públicar, y los valores indiquen el `Service`,
+`Namespace` y el puerto donde se debe rutear el tráfico. En nuestro caso, esto sería
+algo así:
+
+```yaml
+data:
+  9001: "default/filebeat-cisco:9001"
+  9003: "default/filebeat-cisco:9003"
+  9002: "default/filebeat-cisco:9002"
+  9506: "default/filebeat-cisco:9506"
+  9525: "default/filebeat-cisco:9525"
+```
+
+Para realizar estas modificaciones vamos a utilizar el cómando `patch` de `kubectl`
+que permite combinar la configuración existente de un recurso con nuevas opciones.
 
 ```bash
 # 1.
@@ -639,53 +719,184 @@ k -n ingress patch daemonset.apps/nginx-ingress-microk8s-controller \
 # 2.
 # Patcheamos la configuración del `Ingress` de UDP
 k -n ingress patch configmap/nginx-ingress-udp-microk8s-conf \
-  --type merge \
   --patch "$(cat filebeat/nginx-ingress-udp-microk8s-conf-cisco-patch.yaml)"
 ```
 
+Este proceso hara que se vuelvan a crear todos los `pods` asociados al `nginx-ingress`.
+Una vez que todos esten nuevamente en estado `Ready` podremos comenzar a enviar
+`logs` a Elasticsearch a través de Filebeat.
+
 ## Netflow
 
-Filebeat es otro producto más desarrollado por Elastic que simplifica el proceso de
-ingesta de datos. Nosotros lo utilizaremos para indexar Netflow.
+Filebeat tambien permite la configuración de un modulo para recibir Netflow. El
+proceso para dejar funcionando este módulo es equivalente al anterior pero abriendo
+un puerto distinto. Sin embargo, si ya contamos con Filebeat operando dentro del
+clúster, no tiene sentido que levantemos `pods` adicionales para recibir el tráfico
+de Netflow. En cambio, lo mejor es utilizar los `pods` existentes, simplemente
+cambiando la configuración.
 
-Para ponerlo en producción solo tenemos que correr los siguientes comandos:
+Realizaremos exactamente esto para dejar Netflow funcionando en el clúster.
+
+Primero debemos agregar la siguiente configuración al `ConfigMap` que contiene la
+configuración de Filebeat. La actualización de un `ConfigMap` no genera la actualización
+de los recursos que estén utilizando del mismo. Solamente nuevos recursos que apunten
+a el utilizarán las nuevas configuraciones. Esto es porque se entiende que los `ConfigMap`
+son entidades inmutables. Osea, que no cambian.
+
+¿Como actualizamos un `ConfigMap` entonces?
+
+No lo hacemos. En cambio, creamos un nuevo `ConfigMap` y apuntamos los recursos que
+lo deben consumir al mismo. Esto tiene la ventaja que si el `ConfigMap` contiene algún
+error, los recursos fallarán al momento de actulizarse, y volverán a su estado anterior
+sin necesidad de interacción por el administrador, y evitando caídas de sistema.
+
+Entonces, debemos crear un nuevo `ConfigMap` igual al anterior, agregando la configuración
+del módulo de Netflow. Llamaremos este configmap como `filebeat-config-YYYY-MM-DD.yaml` para
+indicar su versión.
+
+**Modificar el sufijo de acuerdo a la fecha en que se realicen estos pasos.**
+
+```yaml
+- module: netflow
+  log:
+    enabled: true
+    var:
+      netflow_host: 0.0.0.0
+      netflow_port: 2055
+```
+
+Por ahora nos limitaremos a crear el nuevo `ConfigMap`. Más adelante, mostraremos
+como se puede modificar el `DaemonSet` para que consuma esta nueva configuración.
+
+**Antes de copiar y pegar estos comandos, verifique que la configuración utilizada
+dentro del `ConfigMap` se encuentra correctamente configurada:**
 
 ```bash
 # 1.
-# Aplicamos los recursos
-k apply -f filebeat/filebeat-netflow.yaml
+# Creamos el nuevo archivo que filebeat.
+# Las comillas en 'EOF' indican que no queremos expansión de variables.
+cat >> filebeat.yml << 'EOF'
+filebeat.modules:
+  - module: netflow
+    log:
+      enabled: true
+      var:
+        netflow_host: 0.0.0.0
+        netflow_port: 2055
+  - module: cisco
+    asa:
+      enabled: true
+      var.syslog_host: 0.0.0.0
+      var.syslog_port: 9001
+      var.log_level: 5
+    ftd:
+      enabled: true
+      var.syslog_host: 0.0.0.0
+      var.syslog_port: 9003
+      var.log_level: 5
+    ios:
+      enabled: true
+      var.syslog_host: 0.0.0.0
+      var.syslog_port: 9002
+    nexus:
+      enabled: true
+      var.syslog_host: 0.0.0.0
+      var.syslog_port: 9506
+      var.tz_offset: -03:00
+    meraki:
+      enabled: true
+      var.syslog_host: 0.0.0.0
+      var.syslog_port: 9525
+      var.tz_offset: -03:00
+    umbrella:
+      enabled: false
+
+setup.template.settings:
+  index.number_of_shards: 2
+  index.number_of_replicas: 2
+
+setup.kibana.host: "http://${KIBANA_HOST}:${KIBANA_PORT}"
+setup.kibana.ssl.enabled: true
+
+output.elasticsearch.hosts: ['https://${ELASTICSEARCH_HOST}:${ELASTICSEARCH_PORT}']
+output.elasticsearch.username: ${ELASTICSEARCH_USERNAME}
+output.elasticsearch.password: ${ELASTICSEARCH_PASSWORD}
+output.elasticsearch.ssl.certificate_authorities: ["/etc/pki/root/ca.crt"]
+output.elasticsearch.ssl.certificate: "/etc/pki/root/tls.crt"
+output.elasticsearch.ssl.key: "/etc/pki/root/tls.key"
+EOF
 # 2.
-# Esperamos unos segundos a que terminen de levantarse los contenedores
-sleep 30
+# Creamos el nuevo `ConfigMap`
+k create configmap filebeat-config-2021-01-30 --from-file=filebeat.yml
+```
+
+Se puede apreciar que los `pods` de Filebeat escucharán por los mensajes de Netflow
+en el puerto `2055/udp`. Por lo tanto, vamos a tener que abrir este puerto en:
+
+1. Los `pods` de Filebeat.
+2. Los `pods` del `nginx-ingress`.
+
+Además, vamos a tener que modificar el `Service` de Filbeat para incluir este puerto.
+Y modificar el `ConfigMap` llamado `nginx-ingres-udp-microk8s-conf` para que le indique
+al `nginx-ingress` a donde mandar el tráfico de Netflow.
+
+Vamos a utilizar el comando `patch` de `kubectl` para aplicar estos cambios en los
+recursos mencionados.
+
+```bash
+# 1.
+# Abrimos el puerto 2055 en los `pods` de Filebeat y modificamos la configuración
+# para que consuma el nuevo `ConfigMap`.
+# OBS: Verifique el nombre del `ConfigMap` antes de realizar estos cambios.
+k patch daemonset filebeat --patch "$(cat <<- EOF
+spec:
+  template:
+    spec:
+      containers:
+        - name: filebeat
+          ports:
+            - containerPort: 2055
+              protocol: UDP
+      volumes:
+        - name: config
+          configMap:
+            defaultMode: 0640
+            name: filebeat-config-2021-01-30
+EOF
+)"
+# 2.
+# Abrimos el puerto 2055 en los `pods` de `ingress-nginx`.
+k -n ingress patch daemonset.apps/nginx-ingress-microk8s-controller --patch "$(cat <<- EOF
+spec:
+  template:
+    spec:
+      containers:
+        - name: nginx-ingress-microk8s
+          ports:
+            - containerPort: 2055
+              hostPort: 2055
+              name: netflow
+              protocol: UDP
+EOF
+)"
 # 3.
-# Obtenemos el id de alguno de los pods de FILEBEAT
-export FILEBEAT_POD=$(k get all | grep pod/filebeat | awk '{print $1}' | head -n 1)
+# Agregamos el puerto 2055 al `Service` filebeat-cisco
+k patch service filebeat-cisco --patch "$(cat <<- EOF
+spec:
+  ports:
+    - name: netflow
+      port: 2055
+      targetPort: 2055
+      protocol: UDP
+EOF
+)"
 # 4.
-# Configuramos los recursos en Elasticsearh y Kibana
-k exec $FILEBEAT_POD -- ./filebeat setup --dashboards -c /etc/filebeat.yml
-k exec $FILEBEAT_POD -- ./filebeat setup --index-management -c /etc/filebeat.yml
-k exec $FILEBEAT_POD -- ./filebeat setup --pipelines -c /etc/filebeat.yml
+# Indicamos a `ingress-nginx` el puerto donde debe enviarnos el tráfico de Netflow.
+k -n ingress patch configmap/nginx-ingress-udp-microk8s-conf --patch "$(cat <<- EOF
+data:
+  2055: "default/filebeat-cisco:2055"
+EOF
+)"
 ```
 
-El proceso para habilitar la ingesta de Netflow es similar a la empleada para la
-configuración de Syslog:
-
-<details>
-<summary><b>Es necesario haber cargado el add-on de <code>ingress</code>.</summary>
-<pre>
-microk8s enable ingress:default-ssl-certificate=default/ssl-certificate
-<pre>
-</details>
-<br/>
-
-```bash
-# 1.
-# Patcheamos los contenedores de `nginx` para que escuchen el puerto de netflow
-k -n ingress patch daemonset.apps/nginx-ingress-microk8s-controller \
-  --patch "$(cat filebeat/nginx-ingress-microk8s-controller-netflow-patch.yaml)"
-# 2.
-# Patcheamos la configuración del `Ingress` de TCP
-k -n ingress patch configmap/nginx-ingress-udp-microk8s-conf \
-  --type merge \
-  --patch "$(cat filebeat/nginx-ingress-udp-microk8s-conf-netflow-patch.yaml)"
-```
+List. Ahora el clúster esta escuchando por Netflow en el puerto 2055.
