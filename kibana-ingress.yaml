@@ -1,9 +1,16 @@
 ---
-apiVersion: networking.k8s.io/v1beta1
+apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
   name: kibana
+  annotations:
+    kubernetes.io/ingress.class: "nginx"
 spec:
+  defaultBackend:
+    service:
+      name: elastic-k8s-kb-http
+      port:
+        number: 5601
   tls:
     - hosts:
         - kibana.k8s.conatest.click
@@ -12,7 +19,10 @@ spec:
     - host: kibana.k8s.conatest.click
       http:
         paths:
-        - path: /
+        - pathType: Prefix
+          path: "/"
           backend:
-            serviceName: elastic-k8s-kb-http
-            servicePort: 5601
+            service:
+              name: elastic-k8s-kb-http
+              port:
+                number: 5601
