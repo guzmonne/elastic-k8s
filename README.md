@@ -166,8 +166,6 @@ simplificar la interacción con `microk8s kubectl`. Por ejemplo:
 # ~/.bash_aliases
 alias kubectl='microk8s kubectl'
 alias k='kubectl'
-alias kap='k get pods --all-namespaces'
-alias kn='k get nodes'
 ```
 
 Ahora tenemos que habilitar una serie de `add-ons` para completar la instalación:
@@ -273,7 +271,7 @@ Para instalar OpenEBS es necesario aplicar los recursos listados en el archivo
 solamente en los nodos identificados con la etiqueta `network=backend`.
 
 ```bash
-k apply -f openebs-operator.yaml
+k apply -f openebs/operator.yaml
 ```
 
 Si todo sale bien podemos veríficar la instalación listando los `pods` correspondientes
@@ -356,7 +354,7 @@ se pueden encontrar en la raíz del proyecto.
 ```bash
 # 1.
 # Creamos el clúster de Elasticsearch
-k apply -f elasticsearch.yaml
+k apply -f elasticsearch/deployment.yaml
 # 2.
 # Monitoreamos el estado del clúster
 k get elasticsearch
@@ -455,8 +453,7 @@ podremos acceder al dashboard de Kibana. El usuario por defecto es también `ela
 y la contraseña se puede obtener de la siguiente manera:
 
 ```
-k get secret elastic-k8s-es-elastic-user -o=jsonpath='{.data.elastic}' |\
-  base64 --decode;echo
+k get secret elastic-k8s-es-elastic-user -o=jsonpath='{.data.elastic}' | base64 --decode;echo
 ```
 
 <details>
@@ -550,7 +547,7 @@ utilizado para publicar servicios fuera del clúster.
 microk8s enable ingress:default-ssl-certificate=default/ssl-certificate
 # 2.
 # Levantar el ingress de Kibana
-k apply -f kibana-ingress.yaml
+k apply -f kibana/ingress.yaml
 ```
 
 Al finalizar de aplicar los cambios vamos a poder acceder al dashboard de Kibana
@@ -899,4 +896,4 @@ EOF
 )"
 ```
 
-List. Ahora el clúster esta escuchando por Netflow en el puerto 2055.
+Listo. Ahora el clúster esta escuchando por Netflow en el puerto 2055.
