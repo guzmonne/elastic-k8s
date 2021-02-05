@@ -1,6 +1,6 @@
 # elastic-k8s
 
-Procedimiento para la instalación de un clúster de Elasticsearch, Kibana, y Logstash
+Procedimiento para la instalación de un clúster de Elasticsearch, Kibana, y Filebeat
 utilizando Ubuntu 20.04, Kubernetes, y OpenEBS.
 
 ## Consejos
@@ -267,8 +267,7 @@ iscsi_tcp
 ### Instalación
 
 Para instalar OpenEBS es necesario aplicar los recursos listados en el archivo
-`./openebs-operator.yaml`. Los mismos están configurados para correr
-solamente en los nodos identificados con la etiqueta `network=backend`.
+`./openebs-operator.yaml`.
 
 ```bash
 k apply -f openebs/operator.yaml
@@ -432,7 +431,7 @@ levantar el dashboard de Kibana.
 ```bash
 # 1.
 # Hacemos el deploy del recurso Kibana
-k apply -f kibana.yaml
+k apply -f kibana/deployment.yaml
 # 2.
 # Obtenemos el estado de los `pod`
 k get pod --selector='kibana.k8s.elastic.co/name=elastic-k8s'
